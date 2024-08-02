@@ -1,21 +1,25 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %
 %   squat_feedback_ML
-%
 %   
-%
+%   ~ ~
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % reset setting
 clear
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% bodyweight setting
+% Medial lateral Maximal Force
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-[body_weight_kg, option] = MultiInputGUI("ML");
+FootDict = containers.Map({'right', 'left'}, {1, 2});
+%[l_ml_f, r_ml_f, err] = InputGUI_ML;
+[l_ml_f, r_ml_f, selectedFoot, err] = MeasureMaxForce;
 
-gravity = 9.80665; % gravity acceleration (m/s^2)
-bodyweight_N = body_weight_kg * gravity;
+% if close the figure, we finish this trial
+if ~isempty(err)
+    disp("🚫 figure closed!, so be finished this trial")
+    return;
+end
 
 % Connect to QTM
 ip = '127.0.0.1';
@@ -26,130 +30,93 @@ QCM('connect', ip, 'frameinfo', 'force');
 % figure setting
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Create a figure window
-figureHandle = figure(1);
+figureHandle = figure('Position', [300, 300, 1200, 600], 'Name', 'ML Force Feedback', 'NumberTitle','off', 'Color', [0.8, 0.8, 0.8]);
 hold on
-% set the figure size
-set(gcf, 'Units', 'Normalized', 'OuterPosition', [0, 0.04, 1, 0.96]);
+
 % remove ticks from axes
-set(gca,'XTICK',[],'YTick',[])
+set(gca,'YTick',[])
 
-% setting figure size to real force plate size
-%           600mm      600mm
-%        ---------------------
-%      x↑         ¦           ¦
-%       o → y     ¦           ¦ 400mm
-%       ¦         ¦           ¦ 
-%        ---------------------
-% original coordinate : left end(x = 0) and center
-xlim=[0 1200];
-ylim = [0 round(bodyweight_N,0)]; % TODO : 데이터 최대값이 대충 얼마인지 파악해서 최대값 지정해야 함
+xlim = [l_ml_f * 1.5, r_ml_f * 1.5];
+ylim = [0, 100];
+
 % set limits for axes
-set(gca, 'xlim',xlim, 'ylim',ylim)
+set(gca, 'xlim', xlim, 'ylim', ylim)
 
-% center coordinate for figure size
-centerpoint = [(xlim(1) + xlim(2)) / 2, (ylim(1) + ylim(2)) / 2];
+% Create bars for left and right force
+l_target_force = l_ml_f * 0.5;
+r_target_force = r_ml_f * 0.5;
+bar_left = bar(l_target_force, 100, 'FaceColor', 'yellow', 'BarWidth', 10);
+bar_right = bar(r_target_force, 100, 'FaceColor', 'yellow', 'BarWidth', 10);
+bar_realtime = bar(0, 100, 'FaceColor', 'blue', 'BarWidth', 10);
 
-% bar blank between vertical center line and each bar
-margin = 300; 
-% initial location of each bar (bottom and center point of bar)
-loc1_org = [centerpoint(1)-margin ylim(1)]; % x1 y
-loc2_org = [centerpoint(1)+margin ylim(1)]; % x2 y
+title('ML slider');
+xlabel('Medial/Lateral Force (N)');
 
-% width of each bar
-width = 100;
-% each bar height
-height = ylim(2) - ylim(1);
+[fs, beep_sound, beep_interval] = SettingBeep;
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% draw outlines
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% start timer
+tStart = tic;
+beep_count = 0;
 
-% draw outline force plate
-plot([0 0],get(gca,'ylim'),'k', 'linewidth',3)
-plot([xlim(2) xlim(2)],get(gca,'ylim'),'k', 'linewidth',3)
-plot([centerpoint(1) centerpoint(1)],get(gca,'ylim'),'k', 'linewidth',3)
-plot(get(gca,'xlim'),[ylim(2) ylim(2)],'k', 'linewidth',3)
-plot(get(gca,'xlim'),[ylim(1) ylim(1)],'k', 'linewidth',3)
-title('Left                                                            Right','fontsize',30)
+% GRF data list for variability graph
+total_grf_list = cell(1,2);
 
-% make handles for each bar to update vGRF and AP COP data
-plot_bar1 = plot([loc1_org(1) - width/2, loc1_org(1) - width/2], [ylim(1), ylim(1)], 'LineWidth', 90,'Color','red');
-plot_bar2 = plot([loc2_org(1) + width/2, loc2_org(1) + width/2], [ylim(1), ylim(1)], 'LineWidth', 90,'Color','blue');
+% to evaluate accuracy, save the peak GRF for each trial.
+peak_grf = cell(1,2);
 
-% draw left bar frame
-plot([loc1_org(1)-width/2 loc1_org(1)+width/2],[height height],'k', 'linewidth',1) % top
-plot([loc1_org(1)-width/2 loc1_org(1)-width/2],[ylim(1) height],'k', 'linewidth',1); % left
-plot([loc1_org(1)+width/2 loc1_org(1)+width/2],[ylim(1) height],'k', 'linewidth',1); % right
-
-% draw right bar frame
-plot([loc2_org(1)-width/2 loc2_org(1)+width/2],[height height],'k', 'linewidth',1); % top
-plot([loc2_org(1)-width/2 loc2_org(1)-width/2],[ylim(1) height],'k', 'linewidth',1); % left
-plot([loc2_org(1)+width/2 loc2_org(1)+width/2],[ylim(1) height],'k', 'linewidth',1); % right
-
-target_line = [];
-target_text = [];
-
-count_text = text(xlim(2)-100, ylim(2)-100, 'Count: 0', 'FontSize', 20, 'HorizontalAlignment', 'center', 'Color', 'black');
-
-% Real time loop with 10 repetitions
-for rep = 1:10
-    %use event function to avoid crash
+% Real time loop with 2 minutes, sound goes off 120 times.
+% For each sound, force is applied alternately in the direction of the media material.
+for rep = 1:2 % 2 minutes
+    peak_grf{1, rep} = struct('med', [], 'lat', []);
     try
-        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        % draw target line
-        %% Perform a target force 10 times at a random rate based on weight
-        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-        % 20% ~ 60% for body weight
-        random_value = round(randi([2, 6]),0);
-        target_value = bodyweight_N * random_value .* 0.1;
-
-        if ishandle(target_line)
-            delete(target_line);
-        end
-        if ishandle(target_text)
-            delete(target_text);
-        end
-
-        % draw new target line and text
-        target_line = plot([loc1_org(1) - width/2, loc2_org(1) + width/2], [target_value target_value], 'LineWidth', 10, 'Color', 'black');
-        target_text = text(loc1_org(1) - width/2 - 100, target_value, sprintf("%d %% for \nbody weight", random_value * 10), 'FontSize', 20, 'HorizontalAlignment', 'center', 'Color', 'black');
-
-        % wait until target value is reached
+        tStart = tic;
         while true
+            % wait until target value is reached
             event = QCM('event');
             % Fetch data from QTM
             [frameinfo,force] = QCM;
     
-            fig = get(groot, 'CurrentFigure');
-            % error occurs when getting realtime grf data. Sometimes there is no data.
-            if isempty(fig)
-                break
+            if ~ishandle(figureHandle)
+                QCM('disconnect');
+                break;
             end
-            if isempty(force{2,1}) || isempty(force{2,2})
-                continue
+    
+            % get GRF Y from plate 1, 2 unit : kgf
+            ml_grf = force{2, FootDict(selectedFoot)}(1, 2);
+    
+            % Update the bars
+            % plate y axis is output in the direction opposite to the axis.
+            bar_realtime.XData = ml_grf;
+    
+            total_grf_list{1,rep} = [total_grf_list{1,rep}, ml_grf];
+    
+            % Play beep sound at the specified intervals
+            elapsed_time = toc(tStart);
+            if elapsed_time >= beep_count * beep_interval
+                sound(beep_sound, fs);
+                beep_count = beep_count + 1;
             end
-
-            % get GRF X from plate 1, 2
-            GRF1 = abs(force{2,2}(1,1))*20;
-            GRF2 = abs(force{2,1}(1,1))*20;
-
-            set(plot_bar1,'xdata',[loc1_org(1), loc1_org(1)],'ydata',[ylim(1), GRF1])
-            set(plot_bar2,'xdata',[loc2_org(1), loc2_org(1)],'ydata',[ylim(1), GRF2])
-
+    
             % update the figure
             drawnow;
 
-            % check if target value is reached
-            if GRF1 >= target_value || GRF2 >= target_value
-                break
+            if toc(tStart) >= 60
+                % Question : 논문에 의하면 peak value와 target force(50% Max) 를 비교하여 error를 구하는데, peak가 가장 큰 값인지, target과 가장 가까운 값인지?
+                [~, l_idx] = min(abs(total_grf_list{1,rep} - l_target_force));
+                [~, r_idx] = min(abs(total_grf_list{1,rep} - r_target_force));
+                
+                switch selectedFoot
+                    case 'left'
+                        % [peak GRF, Absolute Error]
+                        peak_grf{1, rep}.lat = {total_grf_list{1,rep}(l_idx), min(abs(total_grf_list{1,rep} - l_target_force))};
+                        peak_grf{1, rep}.med = {total_grf_list{1,rep}(r_idx), min(abs(total_grf_list{1,rep} - r_target_force))};
+                    case 'right'
+                        peak_grf{1, rep}.med = {total_grf_list{1,rep}(l_idx), min(abs(total_grf_list{1,rep} - l_target_force))};
+                        peak_grf{1, rep}.lat = {total_grf_list{1,rep}(r_idx), min(abs(total_grf_list{1,rep} - r_target_force))};
+                end
+                break;
             end
-        end 
-
-        % Update the count text
-        set(count_text, 'String', sprintf('Count: %d', rep));
-
-        pause(3);
+        end
 
     catch exception
         disp(exception.message);
@@ -157,3 +124,47 @@ for rep = 1:10
     end
 end
 
+delete(figureHandle);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% calculate Absolute Error
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+lr_target_force = containers.Map({'med', 'lat'}, {l_target_force, r_target_force});
+if selectedFoot == "left"
+    flip_v = flip(values(lr_target_force));
+    lr_target_force = containers.Map(keys(lr_target_force), flip_v);
+end
+
+GetAE(peak_grf, lr_target_force);
+
+function GetAE(peak_grf, lr_target_force)
+    % to evaluate accuracy, we calculated a number of error measures
+    % Absolute error is the value of the difference between the peak and target force for each trial.
+    direct = keys(lr_target_force);
+    for rep = 1:2
+        for i = 1:2
+            fprintf('Absolute Error for %s: %2f %% %s for %i trials', direct{i}, peak_grf{1, rep}.(direct{i}){2}, rep);
+        end
+        disp(" ")
+        disp(" ")
+    end
+end
+
+function [fs, beep_sound, beep_interval] = SettingBeep(~, ~)
+    fs = 8000;
+    % Time vector for 0.5 second sound
+    t_sound = 0:1/fs:0.5;
+    % 1000 Hz
+    beep_sound = sin(2*pi*1000*t_sound);
+    
+    % 120 times for 2 minutes
+    total_duration = 120;
+    % num of iterations
+    num_beeps = 120;
+    % pause duration between iterations
+    beep_interval = total_duration / num_beeps;
+end
+
+function playBeep(~, ~)
+    sound(beep_sound, fs);
+end
