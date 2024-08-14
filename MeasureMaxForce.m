@@ -57,78 +57,50 @@ function [min_ml_f, max_ml_f, selectedFoot, err] = MeasureMaxForce
     % make handles for each bar to update Medial Lateral Force
     ml_bar = barh(centerpoint(2), 0, 'FaceColor','green', 'BarWidth', width);
     
+    %{
     % normalized unit about figure size
     circleRadius = 0.1;
     circleRadiusX = 0.1 * (500/1200);
-    circle = annotation('ellipse', [0.2, 0.7, circleRadiusX, circleRadius], 'FaceColor', 'white');
-
+    circle = annotation('ellipse', [0.2, 0.7, circleRadiusX, circleRadius]);
+    pos_x = 130;
+    pos_y = 420;
+    count = text(xlim(1)+pos_x, pos_y, num2str(0), "FontSize", 40);
+    %}
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % GRF data list for measuring maximal medial/lateral force
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    max_grf_list = [];
-    min_grf_list = [];
+    % max iteration is 100,000 for preallocation, because of speed
+    grf_array = zeros(1, 100000);
+    i = 1;
 
-    % measure 3 times and mean the values
-    for rep = 1:3
-        % list to save maximal force for each rep
-        iter_grf_list = [];
-        
+    while ishandle(figureHandle)
         try
-            set(circle, 'FaceColor', 'green');
-            tStart = tic;
-            while true
-                event = QCM('event');
-                [frameinfo, force] = QCM;
-                
-                if ~ishandle(figureHandle)
-                    break;
-                end
-                
-                % get GRF Y from plate 1, 2 unit : kgf
-                ml_grf = force{2, FootDict(selectedFoot)}(1, 2);
-                
-                ml_bar.YData = ml_grf;
+            event = QCM('event');
+            [~, force] = QCM;
+            
+            % get GRF Y from plate 1, 2 unit : kgf
+            ml_grf = force{2, FootDict(selectedFoot)}(1, 2);
+            
+            ml_bar.YData = -ml_grf;
 
-                if ml_grf > 0
-                    pos_x = 0.7;
-                else
-                    pos_x = 0.2;
-                 end
+            grf_array(i) = -ml_grf;
+            i = i+1;
 
-                circle.Position = [pos_x, 0.7, circleRadiusX, circleRadius];
-
-                iter_grf_list = [iter_grf_list, ml_grf];
-                        
-                drawnow;
-                
-                % measure for 3 seconds
-                if toc(tStart) >= 3
-                    set(circle, 'FaceColor', 'red');
-                    break;
-                end
-            end           
+            drawnow;
         
         catch exception
             disp(exception.message);
             break;
-        end
-        
-        max_grf_list = [max_grf_list, max(iter_grf_list)];
-        min_grf_list = [min_grf_list, min(iter_grf_list)];
-
-        % value reset
-        set(ml_bar, 'ydata', 0)
-
-        pause(3);
+        end       
     end
 
     delete(figureHandle);
 
-    disp(min_grf_list);
-    disp(max_grf_list);
-    
-    min_ml_f = mean(mink(min_grf_list, 3));
-    max_ml_f = mean(maxk(max_grf_list, 3));
+    disp(mink(grf_array, 3))
+    disp(maxk(grf_array, 3))
+
+    min_ml_f = mean(mink(grf_array, 3));
+    max_ml_f = mean(maxk(grf_array, 3));
 
     ml = {'medial', 'lateral'};
 
@@ -140,6 +112,11 @@ function [min_ml_f, max_ml_f, selectedFoot, err] = MeasureMaxForce
 
     fprintf("%s %s force: \n", selectedFoot, ml{2})
     disp(abs(max_ml_f));
+    
+    date = datetime("now");
+    ml{3} = 'date';
+    dataTable = table(abs(min_ml_f), abs(max_ml_f), date, 'VariableNames', ml);
+    writetable(dataTable, sprintf('squat-feedback-ML/%s_medial_lateral.xlsx', selectedFoot));
 
     function [sideFoot, err] = InputGUI_MMF
         % we must initialize output variables

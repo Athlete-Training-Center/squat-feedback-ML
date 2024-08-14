@@ -54,22 +54,18 @@ xlabel('Medial/Lateral Force (N)');
 
 [fs, beep_sound, beep_interval] = SettingBeep;
 
-% start timer
-tStart = tic;
-beep_count = 0;
-
-% GRF data list for variability graph
-total_grf_list = cell(1,2);
-
-% to evaluate accuracy, save the peak GRF for each trial.
-peak_grf = cell(1,2);
+% GRF data array for variability graph
+total_grf_array = cell(1,2);
 
 % Real time loop with 2 minutes, sound goes off 120 times.
 % For each sound, force is applied alternately in the direction of the media material.
 for rep = 1:2 % 2 minutes
-    peak_grf{1, rep} = struct('med', [], 'lat', []);
+    uiwait(figureHandle);
+    %% TODO: 시작 전 멈춰있고, 사용자가 버튼 or 키(q or enter)를 누르면 시작하도록 하기
     try
         tStart = tic;
+        beep_count = 0;
+        i = 1;
         while true
             % wait until target value is reached
             event = QCM('event');
@@ -86,34 +82,22 @@ for rep = 1:2 % 2 minutes
     
             % Update the bars
             % plate y axis is output in the direction opposite to the axis.
-            bar_realtime.XData = ml_grf;
+            bar_realtime.XData = -ml_grf;
     
-            total_grf_list{1,rep} = [total_grf_list{1,rep}, ml_grf];
-    
+            total_grf_array{1,rep}{i} = -ml_grf;
+            i = i + 1;
+
+            % update the figure
+            drawnow;
+
             % Play beep sound at the specified intervals
             elapsed_time = toc(tStart);
             if elapsed_time >= beep_count * beep_interval
                 sound(beep_sound, fs);
                 beep_count = beep_count + 1;
             end
-    
-            % update the figure
-            drawnow;
 
-            if toc(tStart) >= 60
-                % Question : 논문에 의하면 peak value와 target force(50% Max) 를 비교하여 error를 구하는데, peak가 가장 큰 값인지, target과 가장 가까운 값인지?
-                [~, l_idx] = min(abs(total_grf_list{1,rep} - l_target_force));
-                [~, r_idx] = min(abs(total_grf_list{1,rep} - r_target_force));
-                
-                switch selectedFoot
-                    case 'left'
-                        % [peak GRF, Absolute Error]
-                        peak_grf{1, rep}.lat = {total_grf_list{1,rep}(l_idx), min(abs(total_grf_list{1,rep} - l_target_force))};
-                        peak_grf{1, rep}.med = {total_grf_list{1,rep}(r_idx), min(abs(total_grf_list{1,rep} - r_target_force))};
-                    case 'right'
-                        peak_grf{1, rep}.med = {total_grf_list{1,rep}(l_idx), min(abs(total_grf_list{1,rep} - l_target_force))};
-                        peak_grf{1, rep}.lat = {total_grf_list{1,rep}(r_idx), min(abs(total_grf_list{1,rep} - r_target_force))};
-                end
+            if elapsed_time >= 60
                 break;
             end
         end
@@ -125,6 +109,30 @@ for rep = 1:2 % 2 minutes
 end
 
 delete(figureHandle);
+
+% to evaluate accuracy, save the peak GRF for each trial.
+peak_grf = cell(1,2);
+
+for rep =1:2
+    grf_array = cell2mat(total_grf_array{1, rep});
+    peak_grf{1, rep} = struct('med', [], 'lat', []);
+    
+    % Question : 논문에 의하면 peak value와 target force(50% Max) 를 비교하여 error를 구하는데, peak가 가장 큰 값인지, target과 가장 가까운 값인지?
+    [~, l_idx] = min(abs(grf_array - l_target_force));
+    [~, r_idx] = min(abs(grf_array - r_target_force));
+    
+    switch selectedFoot
+        case 'left'
+            % [peak GRF, Absolute Error]
+            peak_grf{1, rep}.lat = {grf_array(l_idx), min(abs(grf_array - l_target_force))};
+            peak_grf{1, rep}.med = {grf_array(r_idx), min(abs(grf_array - r_target_force))};
+        case 'right'
+            peak_grf{1, rep}.med = {grf_array(l_idx), min(abs(grf_array - l_target_force))};
+            peak_grf{1, rep}.lat = {grf_array(r_idx), min(abs(grf_array - r_target_force))};
+    end
+end
+
+% save("squat-feedback-ML/force.mat", "total_grf_array")
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % calculate Absolute Error
@@ -139,11 +147,12 @@ GetAE(peak_grf, lr_target_force);
 
 function GetAE(peak_grf, lr_target_force)
     % to evaluate accuracy, we calculated a number of error measures
-    % Absolute error is the value of the difference between the peak and target force for each trial.
+    % Absolute error is the value of the difference between the p   eak and target force for each trial.
     direct = keys(lr_target_force);
     for rep = 1:2
         for i = 1:2
-            fprintf('Absolute Error for %s: %2f %% %s for %i trials', direct{i}, peak_grf{1, rep}.(direct{i}){2}, rep);
+            fprintf('Absolute Error for %s: %2f %% at %i trials', direct{i}, peak_grf{1, rep}.(direct{i}){2}, rep);
+            disp(" ")
         end
         disp(" ")
         disp(" ")
@@ -152,12 +161,12 @@ end
 
 function [fs, beep_sound, beep_interval] = SettingBeep(~, ~)
     fs = 8000;
-    % Time vector for 0.5 second sound
-    t_sound = 0:1/fs:0.5;
+    % Time vector for 0.3 second sound
+    t_sound = 0:1/fs:0.3;
     % 1000 Hz
     beep_sound = sin(2*pi*1000*t_sound);
     
-    % 120 times for 2 minutes
+    % 240 times for 2 minutes
     total_duration = 120;
     % num of iterations
     num_beeps = 120;
@@ -168,3 +177,28 @@ end
 function playBeep(~, ~)
     sound(beep_sound, fs);
 end
+
+numCols = length(grf_array);
+
+% find inflection point
+grad = gradient(grf_array);
+grad_diff = gradient(grad);
+threshold = 10;
+peak_points = find(abs(grad_diff) > threshold);
+%{
+windowSize = 3;
+movingAVGfilteredData = movmean(grf_diff_array, windowSize);
+
+slopeMAF = diff(movingAVGfilteredData);
+slope_changeMAF = diff(slopeMAF);
+threshold = 20;
+peak_pointsMAF = find(abs(slope_changeMAF) > threshold);
+
+plot((1:numCols), movingAVGfilteredData, 'b-', 'DisplayName', 'Moving AVG filter Data')
+plot(peak_pointsMAF + 2, movingAVGfilteredData(peak_pointsMAF + 2), 'bo', 'DisplayName', 'peak point MVG');
+%}
+
+legend;
+plot((1:numCols), grf_array, 'b-', 'DisplayName', 'Original Data');
+hold on;
+plot(peak_points, grf_array(peak_points), 'ro', 'DisplayName', 'peak point');
