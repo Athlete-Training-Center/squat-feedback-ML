@@ -60,8 +60,18 @@ total_grf_array = cell(1,2);
 % Real time loop with 2 minutes, sound goes off 120 times.
 % For each sound, force is applied alternately in the direction of the media material.
 for rep = 1:2 % 2 minutes
-    uiwait(figureHandle);
-    %% TODO: 시작 전 멈춰있고, 사용자가 버튼 or 키(q or enter)를 누르면 시작하도록 하기
+    bar_realtime.XData = 0;
+    % Add text for countdown timer
+    timerText = text(xlim(1)+20, 90, 'Start: 3', 'FontSize', 14, 'FontWeight', 'bold');
+    
+    w = waitforbuttonpress;
+    if ~isempty(w)
+        for sec = 3:-1:0
+            set(timerText, 'String', ['Start: ', num2str(sec)]);
+            pause(1);
+        end
+    end
+    delete(timerText);
     try
         tStart = tic;
         beep_count = 0;
@@ -110,55 +120,17 @@ end
 
 delete(figureHandle);
 
-% to evaluate accuracy, save the peak GRF for each trial.
-peak_grf = cell(1,2);
-
-for rep =1:2
-    grf_array = cell2mat(total_grf_array{1, rep});
-    peak_grf{1, rep} = struct('med', [], 'lat', []);
-    
-    % Question : 논문에 의하면 peak value와 target force(50% Max) 를 비교하여 error를 구하는데, peak가 가장 큰 값인지, target과 가장 가까운 값인지?
-    [~, l_idx] = min(abs(grf_array - l_target_force));
-    [~, r_idx] = min(abs(grf_array - r_target_force));
-    
-    switch selectedFoot
-        case 'left'
-            % [peak GRF, Absolute Error]
-            peak_grf{1, rep}.lat = {grf_array(l_idx), min(abs(grf_array - l_target_force))};
-            peak_grf{1, rep}.med = {grf_array(r_idx), min(abs(grf_array - r_target_force))};
-        case 'right'
-            peak_grf{1, rep}.med = {grf_array(l_idx), min(abs(grf_array - l_target_force))};
-            peak_grf{1, rep}.lat = {grf_array(r_idx), min(abs(grf_array - r_target_force))};
-    end
-end
-
 % save("squat-feedback-ML/force.mat", "total_grf_array")
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % calculate Absolute Error
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-lr_target_force = containers.Map({'med', 'lat'}, {l_target_force, r_target_force});
-if selectedFoot == "left"
-    flip_v = flip(values(lr_target_force));
-    lr_target_force = containers.Map(keys(lr_target_force), flip_v);
-end
+AE = GetAE(total_grf_array, l_target_force, r_target_force, selectedFoot);
 
-GetAE(peak_grf, lr_target_force);
 
-function GetAE(peak_grf, lr_target_force)
-    % to evaluate accuracy, we calculated a number of error measures
-    % Absolute error is the value of the difference between the p   eak and target force for each trial.
-    direct = keys(lr_target_force);
-    for rep = 1:2
-        for i = 1:2
-            fprintf('Absolute Error for %s: %2f %% at %i trials', direct{i}, peak_grf{1, rep}.(direct{i}){2}, rep);
-            disp(" ")
-        end
-        disp(" ")
-        disp(" ")
-    end
-end
-
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Functions
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function [fs, beep_sound, beep_interval] = SettingBeep(~, ~)
     fs = 8000;
     % Time vector for 0.3 second sound
@@ -174,31 +146,63 @@ function [fs, beep_sound, beep_interval] = SettingBeep(~, ~)
     beep_interval = total_duration / num_beeps;
 end
 
-function playBeep(~, ~)
-    sound(beep_sound, fs);
+function total_peak_grf = GetPeakPoint(total_grf_array)
+    total_peak_grf = cell(1,2);
+    for i=1:2
+        total_peak_grf{1, i} = struct('min', [], 'max', []);
+        fig = figure('Units','pixels','Position',[300, 100, 1200, 800]); % maximum 2000 pixels
+    
+        hold on;
+        if i == 1
+            title("0~1 minutes")
+        else
+            title("1~2 minutes")
+        end
+        legend;
+    
+        grf_array = cell2mat(total_grf_array{1,i});
+    
+        numCols = length(grf_array);
+        t = 1:numCols;
+    
+        % find peak points (local minima, maxima)
+        [max_grf, max_t] = findpeaks(grf_array, "MinPeakDistance",10, "MinPeakProminence", 30);
+        TF = islocalmin(grf_array, "MinProminence",100); min_t = t(TF); min_grf = grf_array(TF);
+        total_peak_grf{1, i}.min = min_grf;
+        total_peak_grf{1, i}.max = max_grf;
+        
+        plot(t, grf_array, 'black', 'DisplayName', 'Original Data');
+        plot(min_t, min_grf, 'ro', 'DisplayName', 'peak points');
+        plot(max_t, max_grf, 'ro', 'DisplayName', 'peak points');
+    end
 end
 
-numCols = length(grf_array);
+function changed = changeSide(origin, selectedFoot)
+    if selectedFoot == "left"
+        flip_v = flip(values(origin));
+        changed = containers.Map(keys(origin), flip_v);
+    end
+end
+function AE = GetAE(total_grf_array, l_target_force, r_target_force, selectedFoot)
+    % to evaluate accuracy, we calculated a number of error measures
+    % Absolute error is the value of the difference between the p   eak and target force for each trial.
 
-% find inflection point
-grad = gradient(grf_array);
-grad_diff = gradient(grad);
-threshold = 10;
-peak_points = find(abs(grad_diff) > threshold);
-%{
-windowSize = 3;
-movingAVGfilteredData = movmean(grf_diff_array, windowSize);
+    lr_target_force = containers.Map({'med', 'lat'}, {l_target_force, r_target_force});
+    lr_target_force = changeSide(lr_target_force, selectedFoot);
+    
+    direct = keys(lr_target_force);
 
-slopeMAF = diff(movingAVGfilteredData);
-slope_changeMAF = diff(slopeMAF);
-threshold = 20;
-peak_pointsMAF = find(abs(slope_changeMAF) > threshold);
+    total_peak_grf = GetPeakPoint(total_grf_array);
+    AE = cell(1,2);
+    
+    for rep =1:2
+        peak_grf = total_peak_grf{1, rep};
+        AE{1, rep} = struct('med',[], 'lat',[]);
 
-plot((1:numCols), movingAVGfilteredData, 'b-', 'DisplayName', 'Moving AVG filter Data')
-plot(peak_pointsMAF + 2, movingAVGfilteredData(peak_pointsMAF + 2), 'bo', 'DisplayName', 'peak point MVG');
-%}
-
-legend;
-plot((1:numCols), grf_array, 'b-', 'DisplayName', 'Original Data');
-hold on;
-plot(peak_points, grf_array(peak_points), 'ro', 'DisplayName', 'peak point');
+        min_target = min(l_target_force, r_target_force);
+        max_target = max(l_target_force, r_target_force);
+        
+        AE{1,rep}.(direct{1}) = mean(abs(peak_grf.min - min_target));
+        AE{1,rep}.(direct{2}) = mean(abs(peak_grf.max - max_target));
+    end
+end
