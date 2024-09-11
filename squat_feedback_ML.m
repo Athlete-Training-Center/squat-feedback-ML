@@ -80,13 +80,8 @@ for rep = 1:2 % 2 minutes
             % wait until target value is reached
             event = QCM('event');
             % Fetch data from QTM
-            [frameinfo,force] = QCM;
-    
-            if ~ishandle(figureHandle)
-                QCM('disconnect');
-                break;
-            end
-    
+            [frameinfo,force] = QCM; %?
+            
             % get GRF Y from plate 1, 2 unit : kgf
             ml_grf = force{2, FootDict(selectedFoot)}(1, 2);
     
