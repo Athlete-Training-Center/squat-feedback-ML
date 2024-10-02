@@ -77,6 +77,11 @@ function [min_ml_f, max_ml_f, selectedFoot, err] = MeasureMaxForce
         try
             event = QCM('event');
             [~, force] = QCM;
+            try
+                a = force{2,1}(1,7);
+            catch exception
+                continue
+            end
             
             % get GRF Y from plate 1, 2 unit : kgf
             ml_grf = force{2, FootDict(selectedFoot)}(1, 2);
